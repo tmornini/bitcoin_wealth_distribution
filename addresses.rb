@@ -1,16 +1,27 @@
 #!/usr/bin/env ruby
 
 require 'bigdecimal'
-require 'pp'
 
 private
 
-TOTAL_LINES = 2_161_563
+def page addresses, segment_size
+  length = addresses.length
 
-def lines
-  return @lines unless @lines.nil?
+  segment = 0
 
-  @lines = [ ]
+  while length >= segment * segment_size
+    first = segment * segment_size
+    last  = ( ( segment + 1 ) * segment_size ) - 1
+
+    yield addresses[ first..last ]
+
+    segment += 1
+  end
+end
+
+def read_addresses
+  @all_addresses                      = [ ]
+  @more_than_single_satoshi_addresses = [ ]
 
   ARGF.each_line do |line|
     entry = line.chomp
@@ -19,88 +30,125 @@ def lines
 
     amount = BigDecimal text_amount
 
-    line = { :address => address,
-              :amount  => amount }
+    address = { :address => address,
+                :amount  => amount }
 
-    @lines << line
+    @all_addresses << address
+
+    print '.'
   end
 
-  @lines
+  puts
+  puts 'Reversing...'
+  puts
+
+  @all_addresses.reverse!
 end
 
-def total
-  return @total unless @total.nil?
+def all_addresses
+  @all_addresses
+end
 
-  @total = 0
+SATOSHI = BigDecimal '0.00000001'
 
-  lines.each do |line|
-    @total += line[:amount]
+def more_than_single_satoshi_addresses
+  all_addresses.reject { |a| a[:amount] == SATOSHI }
+end
+
+def sum_amounts addresses
+  addresses.collect { |a| a[:amount] }.reduce :+
+end
+
+def format amount, precision=8
+  total = 9 + precision
+
+  "%#{total}.#{precision}f" % amount
+end
+
+def segment_size addresses
+  addresses.length / 10 + 1
+end
+
+def segmentize addresses
+  page_size = segment_size addresses
+
+  page( addresses, page_size ) do |page_of_addresses|
+    sum = sum_amounts page_of_addresses
+    min = page_of_addresses.first[:amount]
+    max = page_of_addresses.last[:amount]
+
+    yield sum, min, max
+  end
+end
+
+def render addresses, divided_addresses
+  overall_sum = sum_amounts addresses
+
+  puts ' ---------------------------------------------------------------------------------------------------'
+  puts '|             Total |        Percentage |           Average |               Min |               Max |'
+  puts ' ---------------------------------------------------------------------------------------------------'
+
+  segmentize( divided_addresses ) do | sum, min, max |
+    amount     = format sum
+    percentage = format ( sum / overall_sum ) * 100
+    average    = format sum / segment_size( divided_addresses )
+    minimum    = format min
+    maximum    = format max
+
+    puts "| #{amount} | #{percentage} | #{average} | #{minimum} | #{maximum} |"
   end
 
-  @total
+  puts ' ---------------------------------------------------------------------------------------------------'
+  puts
 end
 
-def summarize segment_size
-  line_number = 0
+def render_top addresses, percentage
+  top_index = addresses.length * percentage
 
-  segments = []
-
-  lines.each do |line|
-    line_number += 1
-
-    segment = line_number / segment_size
-
-    amount = line[:amount]
-
-    if segment < 10
-      if segments[segment].nil?
-        segments[segment] = amount
-      else
-        segments[segment] += amount
-      end
-    end
-  end
-
-  return :segment_size => segment_size,
-         :total        => total,
-         :segments     => segments
+  render addresses, addresses[ -top_index..-1 ]
 end
 
-FORMAT = '%17.8d'
-
-def format i
-  i.to_s 'f'
+def run_top_hundred addresses
+  puts 'Top 100%'
+  render_top addresses, 1
 end
 
-def render args
-  segment_size = args[:segment_size]
-  segments     = args[:segments]
+def run_top_ten addresses
+  puts 'Top 10%'
+  render_top addresses, 0.1
+end
 
-  puts "segment_size: #{segment_size}"
+def run_top_one addresses
+  puts 'Top 1%'
+  render_top addresses, 0.01
+end
 
-  puts 'Balances'
+def run_with_single_satoshi
+  puts 'With single satoshi addresses'
+  puts '-----------------------------'
+  puts
 
-  pp segments.collect { |segment| format segment }.reverse
+  run_top_hundred all_addresses
+  run_top_ten     all_addresses
+  run_top_one     all_addresses
+end
 
-  puts 'Percentages'
+def run_without_single_satoshi
+  puts 'Without single satoshi addresses'
+  puts '--------------------------------'
+  puts
 
-  pp segments.collect { |segment| format( segment / total ) }.reverse
+  run_top_hundred more_than_single_satoshi_addresses
+  run_top_ten     more_than_single_satoshi_addresses
+  run_top_one     more_than_single_satoshi_addresses
+end
 
-  puts 'Averages'
-
-  pp segments.collect { |segment| format( segment / segment_size ) }.reverse
+def run_reports
+  run_with_single_satoshi
+  run_without_single_satoshi
 end
 
 public
 
-puts 'All addresses'
-render( summarize TOTAL_LINES / 10 + 1 )
-puts
-
-puts 'Top 10%'
-render( summarize TOTAL_LINES / 10 / 10 + 1 )
-puts
-
-puts 'Top 1%'
-render( summarize TOTAL_LINES / 10 / 10 / 10 + 1 )
-puts
+read_addresses
+run_reports
